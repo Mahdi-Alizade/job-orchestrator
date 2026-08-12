@@ -1,11 +1,12 @@
 export default () => ({
+  // Using || to guarantee a value is returned
   port: parseInt(process.env.PORT, 10) || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
   
   redis: {
-    host: process.env.REDIS_HOST ?? 'localhost',
+    host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-    password: process.env.REDIS_PASSWORD, // Can be undefined safely if empty
+    password: process.env.REDIS_PASSWORD || undefined,
   },
 
   jobs: {
