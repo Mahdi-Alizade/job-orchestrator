@@ -4,7 +4,7 @@ import { Type } from 'class-transformer';
 export class CommandOptionDto {
   @IsString()
   @IsNotEmpty()
-  key: string = '';
+  key: string = ''; // Default empty string to avoid TS strict errors
 
   @IsString()
   @IsNotEmpty()
