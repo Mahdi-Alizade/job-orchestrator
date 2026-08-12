@@ -4,25 +4,25 @@ import { Type } from 'class-transformer';
 export class CommandOptionDto {
   @IsString()
   @IsNotEmpty()
-  key: string;
+  key: string = '';
 
   @IsString()
   @IsNotEmpty()
-  value: string;
+  value: string = '';
 }
 
 export class ExecuteTaskDto {
   @IsString()
   @IsNotEmpty()
-  repoUrl: string; // URL گیت‌هاب یا لینک مستقیم فایل
+  repoUrl: string = '';
 
   @IsString()
   @IsNotEmpty()
-  imageName: string; // اسم ایمیج داکر برای اجرای تست (مثلا node:latest)
+  imageName: string = '';
 
   @IsString()
   @IsNotEmpty()
-  command: string; // دستوری که داخل کانتینر اجرا میشه (مثلا npm test)
+  command: string = '';
 
   @IsOptional()
   @ValidateNested({ each: true })
