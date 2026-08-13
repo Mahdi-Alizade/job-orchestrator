@@ -2,15 +2,11 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { TaskManagerController } from './task-manager.controller';
 import { TaskManagerService } from './task-manager.service';
-import { ProcessorsModule } from './processors/jobs.processor.module';
 
 @Module({
-  imports: [
-    // Register the processor to consume from the queue
-    BullModule.registerQueue({ name: 'jobs' }),
-    ProcessorsModule,
-  ],
+  imports: [BullModule.registerQueue({ name: 'jobs' })],
   controllers: [TaskManagerController],
   providers: [TaskManagerService],
+  exports: [TaskManagerService], // این خط مشکل DI را حل می‌کند
 })
 export class TaskManagerModule {}
