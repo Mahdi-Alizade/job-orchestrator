@@ -1,9 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { QueueScheduler } from 'bullmq';
 import { AppModule } from './app.module';
-import { JobsProcessor } from './modules/task-manager/processors/jobs.processor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -20,18 +18,11 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
   
   const configService = app.get(ConfigService);
-  const port = configService.get<number>('port', 3000);
+  const port = configService.get<number>('port') || 3000;
 
-  // Initialize Queue Scheduler to handle the queues
-  // This must match the connection settings in app.module.ts
-  const scheduler = new QueueScheduler('jobs', {
-    connection: {
-      host: configService.get<string>('redis.host'),
-      port: configService.get<number>('redis.port'),
-    },
-  });
-
-  console.log(`[Scheduler] Listening on port ${configService.get<number>('redis.port')}`);
+  // BullMQ Scheduler is handled automatically by @nestjs/bullmq 
+  // when Processors are registered in the module graph.
+  // No manual instantiation is required.
 
   await app.listen(port);
   console.log(`[Orchestrator API] Running securely on port ${port}`);
