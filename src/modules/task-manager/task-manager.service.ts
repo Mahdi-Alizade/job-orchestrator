@@ -13,7 +13,6 @@ import { ExecuteTaskDto } from './dto/execute-task.dto';
 export class TaskManagerService {
   private readonly logger = new Logger(TaskManagerService.name);
 
-  // Windows Docker Desktop uses named pipe via socketPath (NOT host)
   private readonly docker: Docker =
     process.platform === 'win32'
       ? new Docker({ socketPath: '//./pipe/docker_engine' })
@@ -60,7 +59,6 @@ export class TaskManagerService {
     try {
       this.logger.log(`[${taskId}] Spawning container: ${imageName}`);
 
-      // Ensure image exists locally (pull if missing)
       await this.ensureImage(imageName);
 
       const container = await this.docker.createContainer({
@@ -72,13 +70,12 @@ export class TaskManagerService {
         Tty: false,
         HostConfig: {
           AutoRemove: false,
-          NetworkMode: 'none', // isolate network for safety
+          NetworkMode: 'none',
         },
       });
 
       await container.start();
 
-      // Wait until container exits
       const waitResult = await container.wait();
       const exitCode =
         typeof waitResult?.StatusCode === 'number' ? waitResult.StatusCode : 1;
@@ -119,12 +116,58 @@ export class TaskManagerService {
     }
 
     await new Promise<void>((resolve, reject) => {
-      this.docker.pull(imageName, (err: Error | null, stream: NodeJS.ReadableStream) => {
-        if (err) {
-          reject(err);
-          return;
-        }
+      this.docker.pull(
+        imageName,
+        (err: Error | null, stream: NodeJS.ReadableStream) => {
+          if (err) {
+            reject(err);
+            return;
+          }
 
-        this.docker.modem.followProgress(stream, (pullErr: Error | null) => {
-          if (pullErr) reject(pullErr);
-         
+          this.docker.modem.followProgress(
+            stream,
+            (pullErr: Error | null) => {
+              if (pullErr) {
+                reject(pullErr);
+              } else {
+                resolve();
+              }
+            },
+          );
+        },
+      );
+    });
+  }
+
+  private demuxDockerLogs(buffer: Buffer | string): string {
+    if (typeof buffer === 'string') {
+      return buffer;
+    }
+
+    if (!Buffer.isBuffer(buffer)) {
+      return String(buffer);
+    }
+
+    let offset = 0;
+    let output = '';
+
+    while (offset + 8 <= buffer.length) {
+      const size = buffer.readUInt32BE(offset + 4);
+      const start = offset + 8;
+      const end = start + size;
+
+      if (end > buffer.length) {
+        break;
+      }
+
+      output += buffer.slice(start, end).toString('utf8');
+      offset = end;
+    }
+
+    if (!output) {
+      output = buffer.toString('utf8');
+    }
+
+    return output.trim();
+  }
+}
