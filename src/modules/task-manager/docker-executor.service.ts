@@ -35,7 +35,7 @@ export class DockerExecutorService {
 
     this.logger.log(`[${taskId}] Provisioning sandboxed container on image: ${imageName}`);
 
-    const container = await this.docker.createContainer({
+    const container: Docker.Container = await this.docker.createContainer({
       Image: imageName,
       name: containerName,
       Cmd: ['sh', '-c', command],
@@ -46,7 +46,7 @@ export class DockerExecutorService {
         AutoRemove: false,
         NetworkMode: 'none',
         Memory: 512 * 1024 * 1024,
-        NanoCPUs: 1000000000,
+        NanoCpus: 1000000000,
         PidsLimit: 50,
         CapDrop: ['ALL'],
         ReadonlyRootfs: true,
@@ -70,7 +70,7 @@ export class DockerExecutorService {
     try {
       await container.start();
 
-      const waitResult = await container.wait();
+      const waitResult: any = await container.wait();
       clearTimeout(timeoutHandle);
 
       const exitCode = isTimedOut
