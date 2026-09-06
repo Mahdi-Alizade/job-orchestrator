@@ -1,31 +1,27 @@
-import { IsString, IsNotEmpty, ValidateNested, IsOptional } from 'class-validator';
-import { Type } from 'class-transformer';
-
-export class CommandOptionDto {
-  @IsString()
-  @IsNotEmpty()
-  key: string = ''; // Default empty string to avoid TS strict errors
-
-  @IsString()
-  @IsNotEmpty()
-  value: string = '';
-}
+import {
+  IsNotEmpty,
+  IsString,
+  IsOptional,
+  IsUrl,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 export class ExecuteTaskDto {
-  @IsString()
-  @IsNotEmpty()
-  repoUrl: string = '';
-
-  @IsString()
-  @IsNotEmpty()
-  imageName: string = '';
-
-  @IsString()
-  @IsNotEmpty()
-  command: string = '';
-
   @IsOptional()
-  @ValidateNested({ each: true })
-  @Type(() => CommandOptionDto)
-  options?: CommandOptionDto[];
+  @IsUrl({}, { message: 'repoUrl must be a valid HTTP or HTTPS URL' })
+  repoUrl?: string;
+
+  @IsNotEmpty({ message: 'imageName is required' })
+  @IsString()
+  @MaxLength(100, { message: 'imageName is too long' })
+  @Matches(/^[a-z0-9_.-]+(:[a-z0-9_.-]+)?$/i, {
+    message: 'imageName must follow valid docker tag format (e.g., node:18-alpine, python:3.11-slim)',
+  })
+  imageName: string;
+
+  @IsNotEmpty({ message: 'command is required' })
+  @IsString()
+  @MaxLength(500, { message: 'command cannot exceed 500 characters' })
+  command: string;
 }
