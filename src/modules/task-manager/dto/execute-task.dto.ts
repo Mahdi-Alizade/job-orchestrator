@@ -18,10 +18,10 @@ export class ExecuteTaskDto {
   @Matches(/^[a-z0-9_.-]+(:[a-z0-9_.-]+)?$/i, {
     message: 'imageName must follow valid docker tag format (e.g., node:18-alpine, python:3.11-slim)',
   })
-  imageName: string;
+  imageName!: string;
 
   @IsNotEmpty({ message: 'command is required' })
   @IsString()
   @MaxLength(500, { message: 'command cannot exceed 500 characters' })
-  command: string;
+  command!: string;
 }
