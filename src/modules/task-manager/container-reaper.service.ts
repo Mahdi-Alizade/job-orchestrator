@@ -11,7 +11,6 @@ export class ContainerReaperService {
       ? new Docker({ socketPath: '//./pipe/docker_engine' })
       : new Docker({ socketPath: '/var/run/docker.sock' });
 
-  // حداکثر زمان زنده ماندن یک کانتینر مجاز به میلی‌ثانیه (مثلا ۲ دقیقه)
   private readonly maxAllowedLifetimeMs = 2 * 60 * 1000;
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -72,7 +71,7 @@ export class ContainerReaperService {
       try {
         await containerHandle.kill();
       } catch (e) {
-        // اگر قبلاً خاموش شده باشد نادیده می‌گیریم
+        // نادیده گرفتن خطا در صورتی که کانتینر قبلاً خاموش شده باشد
       }
 
       await containerHandle.remove({
