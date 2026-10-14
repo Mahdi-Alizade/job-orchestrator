@@ -15,9 +15,15 @@ export interface ExecuteJobPayload {
   timeoutMs?: number;
 }
 
+export interface ResourceUsageStats {
+  peakMemoryMb: number;
+  cpuPercent: number;
+}
+
 export interface ExecutionResult {
   logs: string;
   exitCode: number;
+  resourceUsage?: ResourceUsageStats;
 }
 
 @Injectable()
@@ -84,14 +90,38 @@ export class DockerExecutorService {
         this.logger.warn(`[${taskId}] Task exceeded execution limit (${timeoutMs}ms). Killing container.`);
         await container.kill();
       } catch {
-        // نادیده گرفتن خطا اگر کانتینر تمام شده باشد
+        // نادیده گرفتن خطا اگر کانتینر بسته شده باشد
       }
     }, timeoutMs);
+
+    // پایش سبک حافظه در پس‌زمینه
+    let maxMemoryBytes = 0;
+    let monitoringActive = true;
+
+    const statsSampler = async () => {
+      while (monitoringActive) {
+        try {
+          const stats: any = await container.stats({ stream: false });
+          const currentUsage = stats?.memory_stats?.usage;
+          if (typeof currentUsage === 'number' && currentUsage > maxMemoryBytes) {
+            maxMemoryBytes = currentUsage;
+          }
+        } catch {
+          // در صورت توقف کانتینر نمونه‌برداری متوقف می‌شود
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    };
 
     try {
       await container.start();
 
+      // شروع ثبت لاگ مصرف در بک‌گراند
+      statsSampler();
+
       const waitResult: any = await container.wait();
+      monitoringActive = false;
       clearTimeout(timeoutHandle);
 
       let finalExitCode = 1;
@@ -109,8 +139,18 @@ export class DockerExecutorService {
 
       const logs = this.demuxDockerLogs(logBuffer);
 
-      return { logs: logs, exitCode: finalExitCode };
+      const peakMb = Math.round((maxMemoryBytes / (1024 * 1024)) * 100) / 100;
+
+      return {
+        logs: logs,
+        exitCode: finalExitCode,
+        resourceUsage: {
+          peakMemoryMb: peakMb,
+          cpuPercent: 0,
+        },
+      };
     } catch (error: any) {
+      monitoringActive = false;
       clearTimeout(timeoutHandle);
       const errMessage = error?.message || String(error);
       this.logger.error(`[${taskId}] Runtime execution failure: ${errMessage}`);
@@ -118,10 +158,11 @@ export class DockerExecutorService {
         `Docker Execution Failure: ${errMessage}`,
       );
     } finally {
+      monitoringActive = false;
       try {
         await container.remove({ force: true, v: true });
       } catch {
-        // نادیده گرفتن خطای حذف
+        // نادیده گرفتن خطای حذف کانتینر
       }
 
       await this.workspaceManager.cleanWorkspace(taskId, workspacePath);
