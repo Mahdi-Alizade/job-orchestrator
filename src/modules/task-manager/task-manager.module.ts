@@ -6,6 +6,7 @@ import { TaskStateService } from './task-state.service';
 import { DockerExecutorService } from './docker-executor.service';
 import { ContainerReaperService } from './container-reaper.service';
 import { WorkspaceManagerService } from './workspace-manager.service';
+import { CommandSanitizerService } from './command-sanitizer.service';
 import { JobsProcessor } from './processors/jobs.processor';
 
 @Module({
@@ -21,6 +22,7 @@ import { JobsProcessor } from './processors/jobs.processor';
     DockerExecutorService,
     ContainerReaperService,
     WorkspaceManagerService,
+    CommandSanitizerService,
     JobsProcessor,
   ],
   exports: [
@@ -29,6 +31,7 @@ import { JobsProcessor } from './processors/jobs.processor';
     DockerExecutorService,
     ContainerReaperService,
     WorkspaceManagerService,
+    CommandSanitizerService,
   ],
 })
 export class TaskManagerModule {}
