@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ResourceUsageStats } from './docker-executor.service';
 
 export type TaskStatus =
   | 'PENDING'
@@ -16,6 +17,7 @@ export interface TaskRecord {
   logs: string;
   startedAt: Date;
   finishedAt: Date | null;
+  resourceUsage?: ResourceUsageStats;
   errorMessage?: string;
 }
 
@@ -23,7 +25,6 @@ export interface TaskRecord {
 export class TaskStateService {
   private readonly logger = new Logger(TaskStateService.name);
 
-  // کش محلی حافظه برای نگه‌داری سریع تاریخچه جاب‌ها
   private readonly taskStore = new Map<string, TaskRecord>();
 
   createInitialRecord(taskId: string, command: string, imageName: string): void {
@@ -52,7 +53,12 @@ export class TaskStateService {
     this.taskStore.set(taskId, record);
   }
 
-  markAsFinished(taskId: string, exitCode: number, logs: string): void {
+  markAsFinished(
+    taskId: string,
+    exitCode: number,
+    logs: string,
+    resourceUsage?: ResourceUsageStats,
+  ): void {
     const record = this.taskStore.get(taskId);
     if (!record) {
       return;
@@ -61,6 +67,7 @@ export class TaskStateService {
     record.exitCode = exitCode;
     record.logs = logs;
     record.finishedAt = new Date();
+    record.resourceUsage = resourceUsage;
 
     if (exitCode === 0) {
       record.status = 'COMPLETED';
