@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { Observable } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { ExecuteTaskDto } from './dto/execute-task.dto';
 import { TaskStateService, TaskRecord } from './task-state.service';
+import { DockerExecutorService } from './docker-executor.service';
 
 @Injectable()
 export class TaskManagerService {
@@ -12,6 +14,7 @@ export class TaskManagerService {
   constructor(
     @InjectQueue('jobs') private readonly jobsQueue: Queue,
     private readonly taskStateService: TaskStateService,
+    private readonly dockerExecutorService: DockerExecutorService,
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
@@ -19,7 +22,6 @@ export class TaskManagerService {
 
     this.logger.log(`Enqueueing task [${generatedId}]: ${taskDto.command.substring(0, 40)}`);
 
-    // ثبت اولیه در استور وضعیت
     this.taskStateService.createInitialRecord(
       generatedId,
       taskDto.command,
@@ -57,5 +59,9 @@ export class TaskManagerService {
   listAllTasks(): TaskRecord[] {
     const records = this.taskStateService.getAllTasks();
     return records;
+  }
+
+  getTaskLiveLogStream(taskId: string): Observable<{ data: string }> {
+    return this.dockerExecutorService.getLiveContainerLogs(taskId);
   }
 }
