@@ -4,6 +4,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import Docker from 'dockerode';
+import { WorkspaceManagerService } from './workspace-manager.service';
 
 export interface ExecuteJobPayload {
   taskId: string;
@@ -27,18 +28,39 @@ export class DockerExecutorService {
       ? new Docker({ socketPath: '//./pipe/docker_engine' })
       : new Docker({ socketPath: '/var/run/docker.sock' });
 
+  constructor(
+    private readonly workspaceManager: WorkspaceManagerService,
+  ) {}
+
   async runJob(payload: ExecuteJobPayload): Promise<ExecutionResult> {
-    const { taskId, imageName, command, timeoutMs = 30000 } = payload;
+    const taskId = payload.taskId;
+    const imageName = payload.imageName;
+    const command = payload.command;
+    const repoUrl = payload.repoUrl;
+    const timeoutMs = payload.timeoutMs || 30000;
+
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
+
+    // آماده‌سازی دایرکتوری و کلون احتمالی گیت
+    const workspacePath = await this.workspaceManager.prepareWorkspace(
+      taskId,
+      repoUrl,
+    );
 
     await this.ensureImage(imageName);
 
     this.logger.log(`[${taskId}] Provisioning sandboxed container on image: ${imageName}`);
 
+    // ماونت دایرکتوری به مسیر /workspace در کانتینر
+    const bindsConfig: string[] = [
+      `${workspacePath}:/workspace:rw`,
+    ];
+
     const container: Docker.Container = await this.docker.createContainer({
       Image: imageName,
       name: containerName,
       Cmd: ['sh', '-c', command],
+      WorkingDir: '/workspace',
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
@@ -49,7 +71,7 @@ export class DockerExecutorService {
         NanoCpus: 1000000000,
         PidsLimit: 50,
         CapDrop: ['ALL'],
-        ReadonlyRootfs: true,
+        Binds: bindsConfig,
         Tmpfs: {
           '/tmp': 'rw,noexec,nosuid,size=64m',
         },
@@ -63,7 +85,7 @@ export class DockerExecutorService {
         this.logger.warn(`[${taskId}] Task exceeded execution limit (${timeoutMs}ms). Killing container.`);
         await container.kill();
       } catch {
-        // Container might already be stopped
+        // نادیده گرفتن خطا اگر کانتینر تمام شده باشد
       }
     }, timeoutMs);
 
@@ -73,11 +95,12 @@ export class DockerExecutorService {
       const waitResult: any = await container.wait();
       clearTimeout(timeoutHandle);
 
-      const exitCode = isTimedOut
-        ? 124
-        : typeof waitResult?.StatusCode === 'number'
-          ? waitResult.StatusCode
-          : 1;
+      let finalExitCode = 1;
+      if (isTimedOut) {
+        finalExitCode = 124;
+      } else if (typeof waitResult?.StatusCode === 'number') {
+        finalExitCode = waitResult.StatusCode;
+      }
 
       const logBuffer = await container.logs({
         stdout: true,
@@ -87,19 +110,24 @@ export class DockerExecutorService {
 
       const logs = this.demuxDockerLogs(logBuffer);
 
-      return { logs, exitCode };
+      return { logs: logs, exitCode: finalExitCode };
     } catch (error: any) {
       clearTimeout(timeoutHandle);
-      this.logger.error(`[${taskId}] Runtime execution failure: ${error?.message || String(error)}`);
+      const errMessage = error?.message || String(error);
+      this.logger.error(`[${taskId}] Runtime execution failure: ${errMessage}`);
       throw new InternalServerErrorException(
-        `Docker Execution Failure: ${error?.message || String(error)}`,
+        `Docker Execution Failure: ${errMessage}`,
       );
     } finally {
+      // ۱. حذف کانتینر
       try {
         await container.remove({ force: true, v: true });
       } catch {
-        // Ignore cleanup deletion failure
+        // نادیده گرفتن خطای حذف
       }
+
+      // ۲. پاکسازی دائمی فایل‌های پروژه از روی هاست
+      await this.workspaceManager.cleanWorkspace(taskId, workspacePath);
     }
   }
 
