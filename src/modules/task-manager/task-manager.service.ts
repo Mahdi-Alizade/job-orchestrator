@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ExecuteTaskDto } from './dto/execute-task.dto';
 import { TaskStateService, TaskRecord } from './task-state.service';
 import { DockerExecutorService } from './docker-executor.service';
+import { CommandSanitizerService } from './command-sanitizer.service';
 
 @Injectable()
 export class TaskManagerService {
@@ -15,16 +16,22 @@ export class TaskManagerService {
     @InjectQueue('jobs') private readonly jobsQueue: Queue,
     private readonly taskStateService: TaskStateService,
     private readonly dockerExecutorService: DockerExecutorService,
+    private readonly commandSanitizer: CommandSanitizerService,
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
+    // اعتبارسنجی و پاکسازی دستور ورودی
+    const validatedCommand = this.commandSanitizer.sanitizeAndValidate(
+      taskDto.command,
+    );
+
     const generatedId = uuidv4();
 
-    this.logger.log(`Enqueueing task [${generatedId}]: ${taskDto.command.substring(0, 40)}`);
+    this.logger.log(`Enqueueing task [${generatedId}]: ${validatedCommand.substring(0, 40)}`);
 
     this.taskStateService.createInitialRecord(
       generatedId,
-      taskDto.command,
+      validatedCommand,
       taskDto.imageName,
     );
 
@@ -34,7 +41,7 @@ export class TaskManagerService {
         taskId: generatedId,
         repoUrl: taskDto.repoUrl,
         imageName: taskDto.imageName,
-        command: taskDto.command,
+        command: validatedCommand,
       },
       {
         attempts: 3,
