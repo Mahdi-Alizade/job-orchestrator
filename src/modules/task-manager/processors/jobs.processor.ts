@@ -25,7 +25,6 @@ export class JobsProcessor extends WorkerHost {
       `[Worker] Processing Job ID: ${taskId} | Target Image: ${imageName} | Cmd: "${command}"`,
     );
 
-    // تغییر وضعیت به در حال اجرا
     this.taskStateService.markAsRunning(taskId);
 
     try {
@@ -40,8 +39,12 @@ export class JobsProcessor extends WorkerHost {
         `[Worker] Completed Job ID: ${taskId} with ExitCode: ${result.exitCode}`,
       );
 
-      // ثبت پایان و لاگ‌های خروجی در استور
-      this.taskStateService.markAsFinished(taskId, result.exitCode, result.logs);
+      this.taskStateService.markAsFinished(
+        taskId,
+        result.exitCode,
+        result.logs,
+        result.resourceUsage,
+      );
 
       return result;
     } catch (error: any) {
