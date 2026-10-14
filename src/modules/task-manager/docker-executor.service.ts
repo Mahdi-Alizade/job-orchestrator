@@ -4,6 +4,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import Docker from 'dockerode';
+import { Observable } from 'rxjs';
 import { WorkspaceManagerService } from './workspace-manager.service';
 
 export interface ExecuteJobPayload {
@@ -41,7 +42,6 @@ export class DockerExecutorService {
 
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
 
-    // آماده‌سازی دایرکتوری و کلون احتمالی گیت
     const workspacePath = await this.workspaceManager.prepareWorkspace(
       taskId,
       repoUrl,
@@ -51,7 +51,6 @@ export class DockerExecutorService {
 
     this.logger.log(`[${taskId}] Provisioning sandboxed container on image: ${imageName}`);
 
-    // ماونت دایرکتوری به مسیر /workspace در کانتینر
     const bindsConfig: string[] = [
       `${workspacePath}:/workspace:rw`,
     ];
@@ -119,16 +118,51 @@ export class DockerExecutorService {
         `Docker Execution Failure: ${errMessage}`,
       );
     } finally {
-      // ۱. حذف کانتینر
       try {
         await container.remove({ force: true, v: true });
       } catch {
         // نادیده گرفتن خطای حذف
       }
 
-      // ۲. پاکسازی دائمی فایل‌های پروژه از روی هاست
       await this.workspaceManager.cleanWorkspace(taskId, workspacePath);
     }
+  }
+
+  getLiveContainerLogs(taskId: string): Observable<{ data: string }> {
+    const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
+
+    return new Observable((subscriber) => {
+      const container = this.docker.getContainer(containerName);
+
+      container.logs(
+        {
+          follow: true,
+          stdout: true,
+          stderr: true,
+        },
+        (err: Error | null, stream?: NodeJS.ReadableStream) => {
+          if (err || !stream) {
+            subscriber.error(err || new Error('Unable to attach to container logs'));
+            return;
+          }
+
+          stream.on('data', (chunk: Buffer) => {
+            const rawChunkText = this.demuxDockerLogs(chunk);
+            if (rawChunkText && rawChunkText.length > 0) {
+              subscriber.next({ data: rawChunkText });
+            }
+          });
+
+          stream.on('end', () => {
+            subscriber.complete();
+          });
+
+          stream.on('error', (streamErr) => {
+            subscriber.error(streamErr);
+          });
+        },
+      );
+    });
   }
 
   private async ensureImage(imageName: string): Promise<void> {
