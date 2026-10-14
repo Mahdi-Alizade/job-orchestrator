@@ -7,7 +7,9 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  Sse,
 } from '@nestjs/common';
+import { Observable } from 'rxjs';
 import { TaskManagerService } from './task-manager.service';
 import { ExecuteTaskDto } from './dto/execute-task.dto';
 
@@ -50,5 +52,16 @@ export class TaskManagerController {
       count: tasks.length,
       data: tasks,
     };
+  }
+
+  @Sse(':id/stream')
+  streamTaskLogs(@Param('id') id: string): Observable<{ data: string }> {
+    const task = this.taskManagerService.getTaskDetails(id);
+
+    if (!task) {
+      throw new NotFoundException(`Task with ID '${id}' was not found.`);
+    }
+
+    return this.taskManagerService.getTaskLiveLogStream(id);
   }
 }
