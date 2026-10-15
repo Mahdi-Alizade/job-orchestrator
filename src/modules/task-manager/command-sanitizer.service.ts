@@ -1,4 +1,5 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { PipelineStep } from './pipeline-step.interface';
 
 @Injectable()
 export class CommandSanitizerService {
@@ -35,5 +36,36 @@ export class CommandSanitizerService {
     }
 
     return trimmed;
+  }
+
+  validatePipelineSteps(steps: PipelineStep[]): PipelineStep[] {
+    if (!steps || steps.length === 0) {
+      throw new BadRequestException('Pipeline must contain at least one execution step.');
+    }
+
+    if (steps.length > 15) {
+      throw new BadRequestException('A single pipeline cannot exceed 15 sequential steps.');
+    }
+
+    const validatedStepsList: PipelineStep[] = [];
+
+    for (let index = 0; index < steps.length; index++) {
+      const currentStep = steps[index];
+      const stepName = currentStep.name ? currentStep.name.trim() : `step-${index + 1}`;
+      const rawStepCommand = currentStep.command;
+
+      // بررسی امنیتی دستور این مرحله از طریق متد تک‌دستور
+      const cleanedCommand = this.sanitizeAndValidate(rawStepCommand);
+
+      const validatedStepItem: PipelineStep = {
+        name: stepName,
+        command: cleanedCommand,
+        continueOnError: Boolean(currentStep.continueOnError),
+      };
+
+      validatedStepsList.push(validatedStepItem);
+    }
+
+    return validatedStepsList;
   }
 }
