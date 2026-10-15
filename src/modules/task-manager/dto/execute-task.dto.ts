@@ -24,4 +24,13 @@ export class ExecuteTaskDto {
   @IsString()
   @MaxLength(500, { message: 'command cannot exceed 500 characters' })
   command!: string;
+
+  @IsOptional()
+  @IsUrl({}, { message: 'callbackUrl must be a valid HTTP or HTTPS URL' })
+  callbackUrl?: string;
+
+  @IsOptional()
+  @IsString({ message: 'webhookSecret must be a valid string' })
+  @MaxLength(128, { message: 'webhookSecret cannot exceed 128 characters' })
+  webhookSecret?: string;
 }
