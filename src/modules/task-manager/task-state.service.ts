@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ResourceUsageStats } from './docker-executor.service';
+import { PipelineExecutionReport, StepExecutionResult } from './pipeline-step.interface';
 
 export type TaskStatus =
   | 'PENDING'
@@ -18,6 +19,7 @@ export interface TaskRecord {
   startedAt: Date;
   finishedAt: Date | null;
   resourceUsage?: ResourceUsageStats;
+  pipelineReport?: PipelineExecutionReport;
   errorMessage?: string;
 }
 
@@ -28,7 +30,7 @@ export class TaskStateService {
   private readonly taskStore = new Map<string, TaskRecord>();
 
   createInitialRecord(taskId: string, command: string, imageName: string): void {
-    const newRecord: TaskRecord = {
+    const initialTaskRecord: TaskRecord = {
       taskId: taskId,
       command: command,
       imageName: imageName,
@@ -39,18 +41,18 @@ export class TaskStateService {
       finishedAt: null,
     };
 
-    this.taskStore.set(taskId, newRecord);
+    this.taskStore.set(taskId, initialTaskRecord);
     this.logger.log(`Initialized tracking state for task [${taskId}]`);
   }
 
   markAsRunning(taskId: string): void {
-    const record = this.taskStore.get(taskId);
-    if (!record) {
+    const currentRecord = this.taskStore.get(taskId);
+    if (!currentRecord) {
       return;
     }
 
-    record.status = 'RUNNING';
-    this.taskStore.set(taskId, record);
+    currentRecord.status = 'RUNNING';
+    this.taskStore.set(taskId, currentRecord);
   }
 
   markAsFinished(
@@ -59,46 +61,72 @@ export class TaskStateService {
     logs: string,
     resourceUsage?: ResourceUsageStats,
   ): void {
-    const record = this.taskStore.get(taskId);
-    if (!record) {
+    const currentRecord = this.taskStore.get(taskId);
+    if (!currentRecord) {
       return;
     }
 
-    record.exitCode = exitCode;
-    record.logs = logs;
-    record.finishedAt = new Date();
-    record.resourceUsage = resourceUsage;
+    currentRecord.exitCode = exitCode;
+    currentRecord.logs = logs;
+    currentRecord.finishedAt = new Date();
+    currentRecord.resourceUsage = resourceUsage;
 
     if (exitCode === 0) {
-      record.status = 'COMPLETED';
+      currentRecord.status = 'COMPLETED';
     } else if (exitCode === 124) {
-      record.status = 'TIMED_OUT';
+      currentRecord.status = 'TIMED_OUT';
     } else {
-      record.status = 'FAILED';
+      currentRecord.status = 'FAILED';
     }
 
-    this.taskStore.set(taskId, record);
-    this.logger.log(`Task [${taskId}] marked as ${record.status}`);
+    this.taskStore.set(taskId, currentRecord);
+    this.logger.log(`Task [${taskId}] marked as ${currentRecord.status}`);
+  }
+
+  markPipelineFinished(
+    taskId: string,
+    pipelineReport: PipelineExecutionReport,
+    combinedLogs: string,
+    resourceUsage?: ResourceUsageStats,
+  ): void {
+    const currentRecord = this.taskStore.get(taskId);
+    if (!currentRecord) {
+      return;
+    }
+
+    const wasSuccessful = pipelineReport.overallSuccess;
+    const finalStatusCode = wasSuccessful ? 0 : 1;
+
+    currentRecord.exitCode = finalStatusCode;
+    currentRecord.logs = combinedLogs;
+    currentRecord.finishedAt = new Date();
+    currentRecord.resourceUsage = resourceUsage;
+    currentRecord.pipelineReport = pipelineReport;
+    currentRecord.status = wasSuccessful ? 'COMPLETED' : 'FAILED';
+
+    this.taskStore.set(taskId, currentRecord);
+    this.logger.log(`Pipeline [${taskId}] marked as ${currentRecord.status} (Total steps: ${pipelineReport.steps.length})`);
   }
 
   markAsFailed(taskId: string, errorMsg: string): void {
-    const record = this.taskStore.get(taskId);
-    if (!record) {
+    const currentRecord = this.taskStore.get(taskId);
+    if (!currentRecord) {
       return;
     }
 
-    record.status = 'FAILED';
-    record.finishedAt = new Date();
-    record.errorMessage = errorMsg;
-    this.taskStore.set(taskId, record);
+    currentRecord.status = 'FAILED';
+    currentRecord.finishedAt = new Date();
+    currentRecord.errorMessage = errorMsg;
+    this.taskStore.set(taskId, currentRecord);
   }
 
   getTaskRecord(taskId: string): TaskRecord | undefined {
-    return this.taskStore.get(taskId);
+    const retrievedRecord = this.taskStore.get(taskId);
+    return retrievedRecord;
   }
 
   getAllTasks(): TaskRecord[] {
-    const items = Array.from(this.taskStore.values());
-    return items;
+    const allRecordsList = Array.from(this.taskStore.values());
+    return allRecordsList;
   }
 }
