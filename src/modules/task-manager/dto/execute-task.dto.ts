@@ -5,7 +5,27 @@ import {
   IsUrl,
   MaxLength,
   Matches,
+  IsArray,
+  ValidateNested,
+  IsBoolean,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class StepItemDto {
+  @IsNotEmpty({ message: 'step name is required' })
+  @IsString()
+  @MaxLength(80, { message: 'step name cannot exceed 80 characters' })
+  name!: string;
+
+  @IsNotEmpty({ message: 'step command is required' })
+  @IsString()
+  @MaxLength(500, { message: 'step command cannot exceed 500 characters' })
+  command!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  continueOnError?: boolean;
+}
 
 export class ExecuteTaskDto {
   @IsOptional()
@@ -20,10 +40,16 @@ export class ExecuteTaskDto {
   })
   imageName!: string;
 
-  @IsNotEmpty({ message: 'command is required' })
+  @IsOptional()
   @IsString()
   @MaxLength(500, { message: 'command cannot exceed 500 characters' })
-  command!: string;
+  command?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StepItemDto)
+  steps?: StepItemDto[];
 
   @IsOptional()
   @IsUrl({}, { message: 'callbackUrl must be a valid HTTP or HTTPS URL' })
