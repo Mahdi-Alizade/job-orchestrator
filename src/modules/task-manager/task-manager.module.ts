@@ -7,6 +7,8 @@ import { DockerExecutorService } from './docker-executor.service';
 import { ContainerReaperService } from './container-reaper.service';
 import { WorkspaceManagerService } from './workspace-manager.service';
 import { CommandSanitizerService } from './command-sanitizer.service';
+import { WebhookSignerService } from './webhook-signer.service';
+import { WebhookDispatcherService } from './webhook-dispatcher.service';
 import { JobsProcessor } from './processors/jobs.processor';
 
 @Module({
@@ -23,6 +25,8 @@ import { JobsProcessor } from './processors/jobs.processor';
     ContainerReaperService,
     WorkspaceManagerService,
     CommandSanitizerService,
+    WebhookSignerService,
+    WebhookDispatcherService,
     JobsProcessor,
   ],
   exports: [
@@ -32,6 +36,8 @@ import { JobsProcessor } from './processors/jobs.processor';
     ContainerReaperService,
     WorkspaceManagerService,
     CommandSanitizerService,
+    WebhookSignerService,
+    WebhookDispatcherService,
   ],
 })
 export class TaskManagerModule {}
