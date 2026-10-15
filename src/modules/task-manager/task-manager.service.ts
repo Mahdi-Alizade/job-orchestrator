@@ -20,28 +20,34 @@ export class TaskManagerService {
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
-    // اعتبارسنجی و پاکسازی دستور ورودی
-    const validatedCommand = this.commandSanitizer.sanitizeAndValidate(
-      taskDto.command,
-    );
+    const rawCommand = taskDto.command;
+    const validatedCommand = this.commandSanitizer.sanitizeAndValidate(rawCommand);
 
     const generatedId = uuidv4();
+    const targetImage = taskDto.imageName;
+    const repositoryUrl = taskDto.repoUrl;
+    const notificationCallbackUrl = taskDto.callbackUrl;
+    const secretSignatureKey = taskDto.webhookSecret;
 
     this.logger.log(`Enqueueing task [${generatedId}]: ${validatedCommand.substring(0, 40)}`);
 
+    // ثبت رکورد اولیه در حافظه موقت وضعیت‌ها
     this.taskStateService.createInitialRecord(
       generatedId,
       validatedCommand,
-      taskDto.imageName,
+      targetImage,
     );
 
+    // افزودن مشخصات تسک به صف ردیس همراه با اطلاعات وب‌هوک
     await this.jobsQueue.add(
       'run-isolated-task',
       {
         taskId: generatedId,
-        repoUrl: taskDto.repoUrl,
-        imageName: taskDto.imageName,
+        repoUrl: repositoryUrl,
+        imageName: targetImage,
         command: validatedCommand,
+        callbackUrl: notificationCallbackUrl,
+        webhookSecret: secretSignatureKey,
       },
       {
         attempts: 3,
@@ -54,18 +60,18 @@ export class TaskManagerService {
       },
     );
 
-    this.logger.log(`Job successfully queued: ${generatedId}`);
+    this.logger.log(`Job successfully dispatched into BullMQ: ${generatedId}`);
     return generatedId;
   }
 
   getTaskDetails(taskId: string): TaskRecord | undefined {
-    const record = this.taskStateService.getTaskRecord(taskId);
-    return record;
+    const foundRecord = this.taskStateService.getTaskRecord(taskId);
+    return foundRecord;
   }
 
   listAllTasks(): TaskRecord[] {
-    const records = this.taskStateService.getAllTasks();
-    return records;
+    const allRecords = this.taskStateService.getAllTasks();
+    return allRecords;
   }
 
   getTaskLiveLogStream(taskId: string): Observable<{ data: string }> {
