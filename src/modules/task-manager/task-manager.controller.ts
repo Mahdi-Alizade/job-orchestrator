@@ -2,66 +2,58 @@ import {
   Controller,
   Post,
   Get,
-  Param,
   Body,
+  Param,
+  Sse,
+  NotFoundException,
   HttpCode,
   HttpStatus,
-  NotFoundException,
-  Sse,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { TaskManagerService } from './task-manager.service';
 import { ExecuteTaskDto } from './dto/execute-task.dto';
+import { TaskRecord } from './task-state.service';
+
+export class CancelTaskDto {
+  reason?: string;
+}
 
 @Controller('tasks')
 export class TaskManagerController {
   constructor(private readonly taskManagerService: TaskManagerService) {}
 
   @Post('execute')
-  @HttpCode(HttpStatus.ACCEPTED)
-  async executeTask(@Body() executeTaskDto: ExecuteTaskDto) {
-    const taskId = await this.taskManagerService.execute(executeTaskDto);
+  async executeTask(@Body() executeTaskDto: ExecuteTaskDto): Promise<{ taskId: string }> {
+    const generatedTaskId = await this.taskManagerService.execute(executeTaskDto);
+    return { taskId: generatedTaskId };
+  }
 
-    return {
-      statusCode: HttpStatus.ACCEPTED,
-      message: 'Task successfully enqueued for execution',
-      taskId: taskId,
-    };
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  async cancelTask(
+    @Param('id') taskId: string,
+    @Body() cancelDto?: CancelTaskDto,
+  ): Promise<{ success: boolean; message: string }> {
+    const result = await this.taskManagerService.cancelTask(taskId, cancelDto?.reason);
+    return result;
   }
 
   @Get(':id')
-  async getTaskStatus(@Param('id') id: string) {
-    const task = this.taskManagerService.getTaskDetails(id);
-
-    if (!task) {
-      throw new NotFoundException(`Task with ID '${id}' was not found.`);
+  getTaskDetails(@Param('id') taskId: string): TaskRecord {
+    const record = this.taskManagerService.getTaskDetails(taskId);
+    if (!record) {
+      throw new NotFoundException(`Task with ID "${taskId}" not found.`);
     }
-
-    return {
-      statusCode: HttpStatus.OK,
-      data: task,
-    };
+    return record;
   }
 
   @Get()
-  async getAllTasks() {
-    const tasks = this.taskManagerService.listAllTasks();
-
-    return {
-      statusCode: HttpStatus.OK,
-      count: tasks.length,
-      data: tasks,
-    };
+  listAllTasks(): TaskRecord[] {
+    return this.taskManagerService.listAllTasks();
   }
 
-  @Sse(':id/stream')
-  streamTaskLogs(@Param('id') id: string): Observable<{ data: string }> {
-    const task = this.taskManagerService.getTaskDetails(id);
-
-    if (!task) {
-      throw new NotFoundException(`Task with ID '${id}' was not found.`);
-    }
-
-    return this.taskManagerService.getTaskLiveLogStream(id);
+  @Sse(':id/logs')
+  streamLogs(@Param('id') taskId: string): Observable<{ data: string }> {
+    return this.taskManagerService.getTaskLiveLogStream(taskId);
   }
 }
