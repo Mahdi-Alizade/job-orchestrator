@@ -7,17 +7,22 @@ import { ExecuteTaskDto } from './dto/execute-task.dto';
 import { TaskStateService, TaskRecord } from './task-state.service';
 import { DockerExecutorService } from './docker-executor.service';
 import { CommandSanitizerService } from './command-sanitizer.service';
+import { SecretCryptoService, EncryptedPayload } from './secret-crypto.service';
 import { PipelineStep } from './pipeline-step.interface';
 
 @Injectable()
 export class TaskManagerService {
   private readonly logger = new Logger(TaskManagerService.name);
 
+  // فرمت استاندارد نام‌گذاری متغیرهای محیطی سیستم
+  private readonly envKeyPattern = /^[A-Z_][A-Z0-9_]*$/i;
+
   constructor(
     @InjectQueue('jobs') private readonly jobsQueue: Queue,
     private readonly taskStateService: TaskStateService,
     private readonly dockerExecutorService: DockerExecutorService,
     private readonly commandSanitizer: CommandSanitizerService,
+    private readonly secretCryptoService: SecretCryptoService,
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
@@ -27,12 +32,10 @@ export class TaskManagerService {
     let normalizedSteps: PipelineStep[] = [];
     let summaryCommandText = '';
 
-    // سناریوی اول: کاربر آرایه‌ای از گام‌های پایپ‌لاین فرستاده است
     if (rawStepsList && rawStepsList.length > 0) {
       normalizedSteps = this.commandSanitizer.validatePipelineSteps(rawStepsList);
       summaryCommandText = `Pipeline [${normalizedSteps.length} steps]: ${normalizedSteps.map((s) => s.name).join(' -> ')}`;
     } else if (rawSingleCommand && rawSingleCommand.trim().length > 0) {
-      // سناریوی دوم: اجرای تک‌دستور سنتی
       const cleanCommand = this.commandSanitizer.sanitizeAndValidate(rawSingleCommand);
       normalizedSteps = [
         {
@@ -46,6 +49,31 @@ export class TaskManagerService {
       throw new BadRequestException('Either a "command" or at least one entry in "steps" must be specified.');
     }
 
+    // اعتبارسنجی و رمزنگاری امن متغیرهای محیطی
+    const encryptedEnvMap: Record<string, EncryptedPayload> = {};
+    const inputEnv = taskDto.env;
+
+    if (inputEnv && typeof inputEnv === 'object') {
+      const keys = Object.keys(inputEnv);
+
+      for (let i = 0; i < keys.length; i++) {
+        const rawKey = keys[i];
+        const trimmedKey = rawKey.trim();
+
+        if (!this.envKeyPattern.test(trimmedKey)) {
+          throw new BadRequestException(
+            `Invalid environment variable name: "${trimmedKey}". Only alphanumeric and underscore allowed.`,
+          );
+        }
+
+        const rawValue = String(inputEnv[rawKey] ?? '');
+        const cipherPayload = this.secretCryptoService.encryptSecret(rawValue);
+        encryptedEnvMap[trimmedKey] = cipherPayload;
+      }
+
+      this.logger.log(`Encrypted ${keys.length} environment variable(s) for task execution`);
+    }
+
     const generatedId = uuidv4();
     const targetImage = taskDto.imageName;
     const repositoryUrl = taskDto.repoUrl;
@@ -54,14 +82,12 @@ export class TaskManagerService {
 
     this.logger.log(`Enqueueing job [${generatedId}] with ${normalizedSteps.length} execution step(s)`);
 
-    // ایجاد رکورد اولیه در ذخیره‌ساز حافظه
     this.taskStateService.createInitialRecord(
       generatedId,
       summaryCommandText,
       targetImage,
     );
 
-    // ارسال پی‌لود کامل به صف پردازش BullMQ
     await this.jobsQueue.add(
       'run-isolated-task',
       {
@@ -70,6 +96,7 @@ export class TaskManagerService {
         imageName: targetImage,
         command: summaryCommandText,
         steps: normalizedSteps,
+        encryptedEnv: encryptedEnvMap,
         callbackUrl: notificationCallbackUrl,
         webhookSecret: secretSignatureKey,
       },
@@ -84,7 +111,7 @@ export class TaskManagerService {
       },
     );
 
-    this.logger.log(`Job [${generatedId}] successfully queued for multi-step execution.`);
+    this.logger.log(`Job [${generatedId}] successfully queued.`);
     return generatedId;
   }
 
