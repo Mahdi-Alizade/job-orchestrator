@@ -49,6 +49,25 @@ export class DockerExecutorService {
     private readonly workspaceManager: WorkspaceManagerService,
   ) {}
 
+  async killTaskContainer(taskId: string): Promise<boolean> {
+    const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
+    try {
+      const container = this.docker.getContainer(containerName);
+      const inspectData = await container.inspect();
+
+      if (inspectData.State.Running) {
+        this.logger.warn(`[${taskId}] Manually terminating running container: ${containerName}`);
+        await container.kill();
+      }
+
+      await container.remove({ force: true, v: true });
+      return true;
+    } catch (err: any) {
+      this.logger.debug(`[${taskId}] Container termination note: ${err?.message || err}`);
+      return false;
+    }
+  }
+
   async runJob(payload: ExecuteJobPayload): Promise<ExecutionResult> {
     const taskId = payload.taskId;
     const imageName = payload.imageName;
@@ -74,7 +93,6 @@ export class DockerExecutorService {
       `${workspacePath}:/workspace:rw`,
     ];
 
-    // در صورت وجود کش، پوشه کش به مسیر مقصد درون کانتینر ماونت می‌شود
     if (cacheDir && cacheDestinations.length > 0) {
       for (let i = 0; i < cacheDestinations.length; i++) {
         const dest = cacheDestinations[i];
@@ -113,7 +131,7 @@ export class DockerExecutorService {
         this.logger.warn(`[${taskId}] Task exceeded execution limit (${timeoutMs}ms). Killing container.`);
         await container.kill();
       } catch {
-        // نادیده گرفتن خطا اگر کانتینر قبلاً بسته شده باشد
+        // نادیده گرفتن خطا در صورت خاتمه قبلی کانتینر
       }
     }, timeoutMs);
 
@@ -180,7 +198,7 @@ export class DockerExecutorService {
       try {
         await container.remove({ force: true, v: true });
       } catch {
-        // نادیده گرفتن خطای حذف کانتینر
+        // نادیده گرفتن خطا
       }
 
       await this.workspaceManager.cleanWorkspace(taskId, workspacePath);
