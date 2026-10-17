@@ -6,12 +6,18 @@ import {
 import Docker from 'dockerode';
 import { Observable } from 'rxjs';
 import { WorkspaceManagerService } from './workspace-manager.service';
+import {
+  PipelineStep,
+  StepExecutionResult,
+  PipelineExecutionReport,
+} from './pipeline-step.interface';
 
 export interface ExecuteJobPayload {
   taskId: string;
   repoUrl?: string;
   imageName: string;
   command: string;
+  steps?: PipelineStep[];
   timeoutMs?: number;
 }
 
@@ -24,6 +30,7 @@ export interface ExecutionResult {
   logs: string;
   exitCode: number;
   resourceUsage?: ResourceUsageStats;
+  pipelineReport?: PipelineExecutionReport;
 }
 
 @Injectable()
@@ -94,7 +101,6 @@ export class DockerExecutorService {
       }
     }, timeoutMs);
 
-    // پایش سبک حافظه در پس‌زمینه
     let maxMemoryBytes = 0;
     let monitoringActive = true;
 
@@ -107,7 +113,6 @@ export class DockerExecutorService {
             maxMemoryBytes = currentUsage;
           }
         } catch {
-          // در صورت توقف کانتینر نمونه‌برداری متوقف می‌شود
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 800));
@@ -116,8 +121,6 @@ export class DockerExecutorService {
 
     try {
       await container.start();
-
-      // شروع ثبت لاگ مصرف در بک‌گراند
       statsSampler();
 
       const waitResult: any = await container.wait();
@@ -138,7 +141,6 @@ export class DockerExecutorService {
       });
 
       const logs = this.demuxDockerLogs(logBuffer);
-
       const peakMb = Math.round((maxMemoryBytes / (1024 * 1024)) * 100) / 100;
 
       return {
@@ -159,6 +161,190 @@ export class DockerExecutorService {
       );
     } finally {
       monitoringActive = false;
+      try {
+        await container.remove({ force: true, v: true });
+      } catch {
+        // نادیده گرفتن خطای حذف کانتینر
+      }
+
+      await this.workspaceManager.cleanWorkspace(taskId, workspacePath);
+    }
+  }
+
+  async runPipelineJob(
+    taskId: string,
+    steps: PipelineStep[],
+    imageName: string,
+    repoUrl?: string,
+    timeoutMs: number = 60000,
+  ): Promise<ExecutionResult> {
+    const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
+
+    const workspacePath = await this.workspaceManager.prepareWorkspace(
+      taskId,
+      repoUrl,
+    );
+
+    await this.ensureImage(imageName);
+
+    this.logger.log(`[${taskId}] Provisioning long-lived sandbox container for multi-step pipeline`);
+
+    const bindsConfig: string[] = [
+      `${workspacePath}:/workspace:rw`,
+    ];
+
+    // کانتینر برای اجرای مراحل متوالی در پس‌زمینه روشن نگه داشته می‌شود
+    const container = await this.docker.createContainer({
+      Image: imageName,
+      name: containerName,
+      Cmd: ['tail', '-f', '/dev/null'],
+      WorkingDir: '/workspace',
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+      HostConfig: {
+        AutoRemove: false,
+        NetworkMode: 'none',
+        Memory: 512 * 1024 * 1024,
+        NanoCpus: 1000000000,
+        PidsLimit: 50,
+        CapDrop: ['ALL'],
+        Binds: bindsConfig,
+        Tmpfs: {
+          '/tmp': 'rw,noexec,nosuid,size=64m',
+        },
+      },
+    });
+
+    let maxMemoryBytes = 0;
+    let monitoringActive = true;
+
+    const statsSampler = async () => {
+      while (monitoringActive) {
+        try {
+          const stats: any = await container.stats({ stream: false });
+          const currentUsage = stats?.memory_stats?.usage;
+          if (typeof currentUsage === 'number' && currentUsage > maxMemoryBytes) {
+            maxMemoryBytes = currentUsage;
+          }
+        } catch {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    };
+
+    const stepResults: StepExecutionResult[] = [];
+    let combinedLogs = '';
+    let pipelineHalted = false;
+    const pipelineStartTime = Date.now();
+
+    try {
+      await container.start();
+      statsSampler();
+
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        const stepName = step.name;
+        const stepCommand = step.command;
+        const continueOnError = Boolean(step.continueOnError);
+
+        if (pipelineHalted) {
+          stepResults.push({
+            stepName: stepName,
+            command: stepCommand,
+            exitCode: -1,
+            logs: '[SKIPPED due to previous step failure]',
+            durationMs: 0,
+            status: 'SKIPPED',
+          });
+          continue;
+        }
+
+        this.logger.log(`[${taskId}] Running Step [${i + 1}/${steps.length}]: "${stepName}"`);
+
+        const stepHeader = `\n--- [STEP: ${stepName}] ---\n`;
+        combinedLogs += stepHeader;
+
+        const stepStart = Date.now();
+        const execInstance = await container.exec({
+          Cmd: ['sh', '-c', stepCommand],
+          AttachStdout: true,
+          AttachStderr: true,
+          WorkingDir: '/workspace',
+        });
+
+        const execStream = await execInstance.start({ Detach: false });
+        const stepLogChunks: Buffer[] = [];
+
+        await new Promise<void>((resolve, reject) => {
+          execStream.on('data', (chunk: Buffer) => {
+            stepLogChunks.push(chunk);
+          });
+          execStream.on('end', () => resolve());
+          execStream.on('error', (err) => reject(err));
+        });
+
+        const stepDuration = Date.now() - stepStart;
+        const inspectData = await execInstance.inspect();
+        const stepExitCode = typeof inspectData.ExitCode === 'number' ? inspectData.ExitCode : 1;
+
+        const rawStepBuffer = Buffer.concat(stepLogChunks);
+        const stepOutputLogs = this.demuxDockerLogs(rawStepBuffer);
+
+        combinedLogs += stepOutputLogs ? `${stepOutputLogs}\n` : '';
+
+        const stepStatus = stepExitCode === 0 ? 'PASSED' : 'FAILED';
+
+        stepResults.push({
+          stepName: stepName,
+          command: stepCommand,
+          exitCode: stepExitCode,
+          logs: stepOutputLogs,
+          durationMs: stepDuration,
+          status: stepStatus,
+        });
+
+        if (stepExitCode !== 0 && !continueOnError) {
+          this.logger.warn(`[${taskId}] Step "${stepName}" failed with code ${stepExitCode}. Aborting rest of pipeline.`);
+          pipelineHalted = true;
+        }
+      }
+
+      monitoringActive = false;
+      const totalDuration = Date.now() - pipelineStartTime;
+      const overallSuccess = !pipelineHalted && stepResults.every((s) => s.status === 'PASSED' || (s.status === 'FAILED' && steps.find((orig) => orig.name === s.stepName)?.continueOnError));
+
+      const peakMb = Math.round((maxMemoryBytes / (1024 * 1024)) * 100) / 100;
+
+      const report: PipelineExecutionReport = {
+        overallSuccess: overallSuccess,
+        totalDurationMs: totalDuration,
+        steps: stepResults,
+      };
+
+      return {
+        logs: combinedLogs.trim(),
+        exitCode: overallSuccess ? 0 : 1,
+        resourceUsage: {
+          peakMemoryMb: peakMb,
+          cpuPercent: 0,
+        },
+        pipelineReport: report,
+      };
+    } catch (error: any) {
+      monitoringActive = false;
+      const errorText = error?.message || String(error);
+      this.logger.error(`[${taskId}] Pipeline execution failed: ${errorText}`);
+      throw new InternalServerErrorException(`Pipeline Runtime Error: ${errorText}`);
+    } finally {
+      monitoringActive = false;
+      try {
+        await container.kill();
+      } catch {
+        // نادیده گرفتن خطا در صورت خاتمه کانتینر
+      }
+
       try {
         await container.remove({ force: true, v: true });
       } catch {
