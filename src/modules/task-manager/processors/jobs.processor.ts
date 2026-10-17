@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import { DockerExecutorService, ExecutionResult } from '../docker-executor.service';
 import { TaskStateService } from '../task-state.service';
 import { WebhookDispatcherService } from '../webhook-dispatcher.service';
+import { PipelineStep } from '../pipeline-step.interface';
 
 @Processor('jobs')
 export class JobsProcessor extends WorkerHost {
@@ -22,37 +23,64 @@ export class JobsProcessor extends WorkerHost {
     const repoUrl = job.data.repoUrl;
     const imageName = job.data.imageName;
     const command = job.data.command;
+    const steps: PipelineStep[] | undefined = job.data.steps;
     const callbackUrl = job.data.callbackUrl;
     const webhookSecret = job.data.webhookSecret;
-
-    this.logger.log(
-      `[Worker] Processing Job ID: ${taskId} | Target Image: ${imageName} | Cmd: "${command}"`,
-    );
 
     const taskStartTime = new Date().toISOString();
     this.taskStateService.markAsRunning(taskId);
 
     try {
-      const result = await this.dockerExecutor.runJob({
-        taskId: taskId,
-        repoUrl: repoUrl,
-        imageName: imageName,
-        command: command,
-      });
+      let result: ExecutionResult;
+
+      // اگر چند گام وجود داشته باشد، پایپ‌لاین ترتیبی اجرا می‌شود
+      if (steps && steps.length > 0) {
+        this.logger.log(`[Worker] Running multi-step pipeline for Task ID: ${taskId} (${steps.length} steps)`);
+        result = await this.dockerExecutor.runPipelineJob(
+          taskId,
+          steps,
+          imageName,
+          repoUrl,
+        );
+
+        if (result.pipelineReport) {
+          this.taskStateService.markPipelineFinished(
+            taskId,
+            result.pipelineReport,
+            result.logs,
+            result.resourceUsage,
+          );
+        } else {
+          this.taskStateService.markAsFinished(
+            taskId,
+            result.exitCode,
+            result.logs,
+            result.resourceUsage,
+          );
+        }
+      } else {
+        // اجرای حالت تک‌دستور
+        this.logger.log(`[Worker] Running single command for Task ID: ${taskId}`);
+        result = await this.dockerExecutor.runJob({
+          taskId: taskId,
+          repoUrl: repoUrl,
+          imageName: imageName,
+          command: command,
+        });
+
+        this.taskStateService.markAsFinished(
+          taskId,
+          result.exitCode,
+          result.logs,
+          result.resourceUsage,
+        );
+      }
 
       this.logger.log(
-        `[Worker] Completed Job ID: ${taskId} with ExitCode: ${result.exitCode}`,
+        `[Worker] Job ID: ${taskId} finished with ExitCode: ${result.exitCode}`,
       );
 
-      // ذخیره نتیجه در استور وضعیت وظایف
-      this.taskStateService.markAsFinished(
-        taskId,
-        result.exitCode,
-        result.logs,
-        result.resourceUsage,
-      );
-
-      // اگر کاربر آدرس وب‌هوک داده باشد، نوتیفیکیشن ارسال می‌شود
+      // ارسال نتیجه به وب‌هوک در صورت وجود callbackUrl
       if (callbackUrl) {
         const previewText = result.logs ? result.logs.substring(0, 500) : '';
         const taskEndTime = new Date().toISOString();
@@ -72,11 +100,10 @@ export class JobsProcessor extends WorkerHost {
       return result;
     } catch (error: any) {
       const errorMessage = error?.message || String(error);
-      this.logger.error(`[Worker] Failed Job ID: ${taskId} - Reason: ${errorMessage}`);
+      this.logger.error(`[Worker] Job ID: ${taskId} crashed: ${errorMessage}`);
 
       this.taskStateService.markAsFailed(taskId, errorMessage);
 
-      // ارسال نوتیفیکیشن خطا در وب‌هوک
       if (callbackUrl) {
         const failureEndTime = new Date().toISOString();
 
