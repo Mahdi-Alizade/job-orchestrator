@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Observable } from 'rxjs';
@@ -7,6 +7,7 @@ import { ExecuteTaskDto } from './dto/execute-task.dto';
 import { TaskStateService, TaskRecord } from './task-state.service';
 import { DockerExecutorService } from './docker-executor.service';
 import { CommandSanitizerService } from './command-sanitizer.service';
+import { PipelineStep } from './pipeline-step.interface';
 
 @Injectable()
 export class TaskManagerService {
@@ -20,8 +21,30 @@ export class TaskManagerService {
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
-    const rawCommand = taskDto.command;
-    const validatedCommand = this.commandSanitizer.sanitizeAndValidate(rawCommand);
+    const rawSingleCommand = taskDto.command;
+    const rawStepsList = taskDto.steps;
+
+    let normalizedSteps: PipelineStep[] = [];
+    let summaryCommandText = '';
+
+    // سناریوی اول: کاربر آرایه‌ای از گام‌های پایپ‌لاین فرستاده است
+    if (rawStepsList && rawStepsList.length > 0) {
+      normalizedSteps = this.commandSanitizer.validatePipelineSteps(rawStepsList);
+      summaryCommandText = `Pipeline [${normalizedSteps.length} steps]: ${normalizedSteps.map((s) => s.name).join(' -> ')}`;
+    } else if (rawSingleCommand && rawSingleCommand.trim().length > 0) {
+      // سناریوی دوم: اجرای تک‌دستور سنتی
+      const cleanCommand = this.commandSanitizer.sanitizeAndValidate(rawSingleCommand);
+      normalizedSteps = [
+        {
+          name: 'step-main',
+          command: cleanCommand,
+          continueOnError: false,
+        },
+      ];
+      summaryCommandText = cleanCommand;
+    } else {
+      throw new BadRequestException('Either a "command" or at least one entry in "steps" must be specified.');
+    }
 
     const generatedId = uuidv4();
     const targetImage = taskDto.imageName;
@@ -29,23 +52,24 @@ export class TaskManagerService {
     const notificationCallbackUrl = taskDto.callbackUrl;
     const secretSignatureKey = taskDto.webhookSecret;
 
-    this.logger.log(`Enqueueing task [${generatedId}]: ${validatedCommand.substring(0, 40)}`);
+    this.logger.log(`Enqueueing job [${generatedId}] with ${normalizedSteps.length} execution step(s)`);
 
-    // ثبت رکورد اولیه در حافظه موقت وضعیت‌ها
+    // ایجاد رکورد اولیه در ذخیره‌ساز حافظه
     this.taskStateService.createInitialRecord(
       generatedId,
-      validatedCommand,
+      summaryCommandText,
       targetImage,
     );
 
-    // افزودن مشخصات تسک به صف ردیس همراه با اطلاعات وب‌هوک
+    // ارسال پی‌لود کامل به صف پردازش BullMQ
     await this.jobsQueue.add(
       'run-isolated-task',
       {
         taskId: generatedId,
         repoUrl: repositoryUrl,
         imageName: targetImage,
-        command: validatedCommand,
+        command: summaryCommandText,
+        steps: normalizedSteps,
         callbackUrl: notificationCallbackUrl,
         webhookSecret: secretSignatureKey,
       },
@@ -60,7 +84,7 @@ export class TaskManagerService {
       },
     );
 
-    this.logger.log(`Job successfully dispatched into BullMQ: ${generatedId}`);
+    this.logger.log(`Job [${generatedId}] successfully queued for multi-step execution.`);
     return generatedId;
   }
 
