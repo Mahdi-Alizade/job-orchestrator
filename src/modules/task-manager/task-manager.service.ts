@@ -1,4 +1,9 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Observable } from 'rxjs';
@@ -9,6 +14,7 @@ import { DockerExecutorService } from './docker-executor.service';
 import { CommandSanitizerService } from './command-sanitizer.service';
 import { SecretCryptoService, EncryptedPayload } from './secret-crypto.service';
 import { ArtifactCacheService } from './artifact-cache.service';
+import { WebhookDispatcherService } from './webhook-dispatcher.service';
 import { PipelineStep } from './pipeline-step.interface';
 
 @Injectable()
@@ -25,6 +31,7 @@ export class TaskManagerService {
     private readonly commandSanitizer: CommandSanitizerService,
     private readonly secretCryptoService: SecretCryptoService,
     private readonly artifactCacheService: ArtifactCacheService,
+    private readonly webhookDispatcher: WebhookDispatcherService,
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
@@ -120,6 +127,7 @@ export class TaskManagerService {
         webhookSecret: secretSignatureKey,
       },
       {
+        jobId: generatedId,
         attempts: 3,
         backoff: {
           type: 'exponential',
@@ -132,6 +140,48 @@ export class TaskManagerService {
 
     this.logger.log(`Job [${generatedId}] successfully queued with cache payload.`);
     return generatedId;
+  }
+
+  async cancelTask(taskId: string, reason?: string): Promise<{ success: boolean; message: string }> {
+    const existingTask = this.taskStateService.getTaskRecord(taskId);
+
+    if (!existingTask) {
+      throw new NotFoundException(`Task with ID "${taskId}" not found.`);
+    }
+
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(existingTask.status)) {
+      throw new BadRequestException(
+        `Cannot cancel task [${taskId}] because it is already in terminal state: ${existingTask.status}`,
+      );
+    }
+
+    this.logger.warn(`Initiating cancellation for task [${taskId}]...`);
+
+    // ۱. متوقف کردن یا حذف جاب از صف BullMQ
+    try {
+      const bullJob = await this.jobsQueue.getJob(taskId);
+      if (bullJob) {
+        const state = await bullJob.getState();
+        if (state === 'waiting' || state === 'delayed') {
+          await bullJob.remove();
+          this.logger.log(`Removed task [${taskId}] from BullMQ waiting queue.`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Could not remove job from queue directly: ${err?.message || err}`);
+    }
+
+    // ۲. توقف اضطراری کانتینر داکر
+    await this.dockerExecutorService.killTaskContainer(taskId);
+
+    // ۳. به‌روزرسانی وضعیت در حافظه
+    const cancelReason = reason || 'Task manually cancelled by user';
+    this.taskStateService.markAsCancelled(taskId, cancelReason);
+
+    return {
+      success: true,
+      message: `Task [${taskId}] successfully cancelled.`,
+    };
   }
 
   getTaskDetails(taskId: string): TaskRecord | undefined {
