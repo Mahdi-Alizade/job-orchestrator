@@ -19,6 +19,8 @@ export interface ExecuteJobPayload {
   command: string;
   steps?: PipelineStep[];
   env?: string[];
+  cacheDirectory?: string;
+  cachePaths?: string[];
   timeoutMs?: number;
 }
 
@@ -53,6 +55,8 @@ export class DockerExecutorService {
     const command = payload.command;
     const repoUrl = payload.repoUrl;
     const envVariables = payload.env || [];
+    const cacheDir = payload.cacheDirectory;
+    const cacheDestinations = payload.cachePaths || [];
     const timeoutMs = payload.timeoutMs || 30000;
 
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
@@ -69,6 +73,15 @@ export class DockerExecutorService {
     const bindsConfig: string[] = [
       `${workspacePath}:/workspace:rw`,
     ];
+
+    // در صورت وجود کش، پوشه کش به مسیر مقصد درون کانتینر ماونت می‌شود
+    if (cacheDir && cacheDestinations.length > 0) {
+      for (let i = 0; i < cacheDestinations.length; i++) {
+        const dest = cacheDestinations[i];
+        bindsConfig.push(`${cacheDir}:${dest}:rw`);
+      }
+      this.logger.log(`[${taskId}] Mounted ${cacheDestinations.length} persistent cache volume(s)`);
+    }
 
     const container: Docker.Container = await this.docker.createContainer({
       Image: imageName,
@@ -100,7 +113,7 @@ export class DockerExecutorService {
         this.logger.warn(`[${taskId}] Task exceeded execution limit (${timeoutMs}ms). Killing container.`);
         await container.kill();
       } catch {
-        // نادیده گرفتن خطا اگر کانتینر قبلاً متوقف شده باشد
+        // نادیده گرفتن خطا اگر کانتینر قبلاً بسته شده باشد
       }
     }, timeoutMs);
 
@@ -180,6 +193,8 @@ export class DockerExecutorService {
     imageName: string,
     repoUrl?: string,
     envVariables: string[] = [],
+    cacheDirectory?: string,
+    cachePaths: string[] = [],
     timeoutMs: number = 60000,
   ): Promise<ExecutionResult> {
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
@@ -196,6 +211,14 @@ export class DockerExecutorService {
     const bindsConfig: string[] = [
       `${workspacePath}:/workspace:rw`,
     ];
+
+    if (cacheDirectory && cachePaths.length > 0) {
+      for (let i = 0; i < cachePaths.length; i++) {
+        const dest = cachePaths[i];
+        bindsConfig.push(`${cacheDirectory}:${dest}:rw`);
+      }
+      this.logger.log(`[${taskId}] Bound ${cachePaths.length} cache path(s) to pipeline container`);
+    }
 
     const container = await this.docker.createContainer({
       Image: imageName,
@@ -347,7 +370,7 @@ export class DockerExecutorService {
       try {
         await container.kill();
       } catch {
-        // نادیده گرفتن خطا در صورت خاتمه کانتینر
+        // نادیده گرفتن خطا
       }
 
       try {
