@@ -1,13 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ResourceUsageStats } from './docker-executor.service';
-import { PipelineExecutionReport, StepExecutionResult } from './pipeline-step.interface';
+import { PipelineExecutionReport } from './pipeline-step.interface';
 
 export type TaskStatus =
   | 'PENDING'
   | 'RUNNING'
   | 'COMPLETED'
   | 'FAILED'
-  | 'TIMED_OUT';
+  | 'TIMED_OUT'
+  | 'CANCELLED';
 
 export interface TaskRecord {
   taskId: string;
@@ -105,7 +106,9 @@ export class TaskStateService {
     currentRecord.status = wasSuccessful ? 'COMPLETED' : 'FAILED';
 
     this.taskStore.set(taskId, currentRecord);
-    this.logger.log(`Pipeline [${taskId}] marked as ${currentRecord.status} (Total steps: ${pipelineReport.steps.length})`);
+    this.logger.log(
+      `Pipeline [${taskId}] marked as ${currentRecord.status} (Total steps: ${pipelineReport.steps.length})`,
+    );
   }
 
   markAsFailed(taskId: string, errorMsg: string): void {
@@ -120,13 +123,25 @@ export class TaskStateService {
     this.taskStore.set(taskId, currentRecord);
   }
 
+  markAsCancelled(taskId: string, reason: string = 'Task manually aborted by user'): void {
+    const currentRecord = this.taskStore.get(taskId);
+    if (!currentRecord) {
+      return;
+    }
+
+    currentRecord.status = 'CANCELLED';
+    currentRecord.finishedAt = new Date();
+    currentRecord.exitCode = 137; // SIGKILL standard Linux exit code
+    currentRecord.errorMessage = reason;
+    this.taskStore.set(taskId, currentRecord);
+    this.logger.warn(`Task [${taskId}] marked as CANCELLED`);
+  }
+
   getTaskRecord(taskId: string): TaskRecord | undefined {
-    const retrievedRecord = this.taskStore.get(taskId);
-    return retrievedRecord;
+    return this.taskStore.get(taskId);
   }
 
   getAllTasks(): TaskRecord[] {
-    const allRecordsList = Array.from(this.taskStore.values());
-    return allRecordsList;
+    return Array.from(this.taskStore.values());
   }
 }
