@@ -10,6 +10,7 @@ import { CommandSanitizerService } from './command-sanitizer.service';
 import { WebhookSignerService } from './webhook-signer.service';
 import { WebhookDispatcherService } from './webhook-dispatcher.service';
 import { SecretCryptoService } from './secret-crypto.service';
+import { ArtifactCacheService } from './artifact-cache.service';
 import { JobsProcessor } from './processors/jobs.processor';
 
 @Module({
@@ -29,6 +30,7 @@ import { JobsProcessor } from './processors/jobs.processor';
     WebhookSignerService,
     WebhookDispatcherService,
     SecretCryptoService,
+    ArtifactCacheService,
     JobsProcessor,
   ],
   exports: [
@@ -41,6 +43,7 @@ import { JobsProcessor } from './processors/jobs.processor';
     WebhookSignerService,
     WebhookDispatcherService,
     SecretCryptoService,
+    ArtifactCacheService,
   ],
 })
 export class TaskManagerModule {}
