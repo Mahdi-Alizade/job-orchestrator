@@ -27,6 +27,8 @@ export class JobsProcessor extends WorkerHost {
     const command = job.data.command;
     const steps: PipelineStep[] | undefined = job.data.steps;
     const encryptedEnv: Record<string, EncryptedPayload> | undefined = job.data.encryptedEnv;
+    const cacheDirectory: string | undefined = job.data.cacheDirectory;
+    const cachePaths: string[] | undefined = job.data.cachePaths;
     const callbackUrl = job.data.callbackUrl;
     const webhookSecret = job.data.webhookSecret;
 
@@ -62,6 +64,8 @@ export class JobsProcessor extends WorkerHost {
           imageName,
           repoUrl,
           runtimeEnvVariables,
+          cacheDirectory,
+          cachePaths,
         );
 
         if (result.pipelineReport) {
@@ -87,6 +91,8 @@ export class JobsProcessor extends WorkerHost {
           imageName: imageName,
           command: command,
           env: runtimeEnvVariables,
+          cacheDirectory: cacheDirectory,
+          cachePaths: cachePaths,
         });
 
         this.taskStateService.markAsFinished(
