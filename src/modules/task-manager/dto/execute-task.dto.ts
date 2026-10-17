@@ -57,6 +57,16 @@ export class ExecuteTaskDto {
   env?: Record<string, string>;
 
   @IsOptional()
+  @IsString({ message: 'cacheKey must be a valid string' })
+  @MaxLength(128, { message: 'cacheKey cannot exceed 128 characters' })
+  cacheKey?: string;
+
+  @IsOptional()
+  @IsArray({ message: 'cachePaths must be an array of directory paths' })
+  @IsString({ each: true, message: 'each cachePath must be a string' })
+  cachePaths?: string[];
+
+  @IsOptional()
   @IsUrl({}, { message: 'callbackUrl must be a valid HTTP or HTTPS URL' })
   callbackUrl?: string;
 
