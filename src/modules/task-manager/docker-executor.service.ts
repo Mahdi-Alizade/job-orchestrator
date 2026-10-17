@@ -18,6 +18,7 @@ export interface ExecuteJobPayload {
   imageName: string;
   command: string;
   steps?: PipelineStep[];
+  env?: string[];
   timeoutMs?: number;
 }
 
@@ -51,6 +52,7 @@ export class DockerExecutorService {
     const imageName = payload.imageName;
     const command = payload.command;
     const repoUrl = payload.repoUrl;
+    const envVariables = payload.env || [];
     const timeoutMs = payload.timeoutMs || 30000;
 
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
@@ -73,6 +75,7 @@ export class DockerExecutorService {
       name: containerName,
       Cmd: ['sh', '-c', command],
       WorkingDir: '/workspace',
+      Env: envVariables,
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
@@ -97,7 +100,7 @@ export class DockerExecutorService {
         this.logger.warn(`[${taskId}] Task exceeded execution limit (${timeoutMs}ms). Killing container.`);
         await container.kill();
       } catch {
-        // نادیده گرفتن خطا اگر کانتینر بسته شده باشد
+        // نادیده گرفتن خطا اگر کانتینر قبلاً متوقف شده باشد
       }
     }, timeoutMs);
 
@@ -176,6 +179,7 @@ export class DockerExecutorService {
     steps: PipelineStep[],
     imageName: string,
     repoUrl?: string,
+    envVariables: string[] = [],
     timeoutMs: number = 60000,
   ): Promise<ExecutionResult> {
     const containerName = `orchestrator-task-${taskId}`.substring(0, 63);
@@ -193,12 +197,12 @@ export class DockerExecutorService {
       `${workspacePath}:/workspace:rw`,
     ];
 
-    // کانتینر برای اجرای مراحل متوالی در پس‌زمینه روشن نگه داشته می‌شود
     const container = await this.docker.createContainer({
       Image: imageName,
       name: containerName,
       Cmd: ['tail', '-f', '/dev/null'],
       WorkingDir: '/workspace',
+      Env: envVariables,
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
@@ -269,6 +273,7 @@ export class DockerExecutorService {
         const stepStart = Date.now();
         const execInstance = await container.exec({
           Cmd: ['sh', '-c', stepCommand],
+          Env: envVariables,
           AttachStdout: true,
           AttachStderr: true,
           WorkingDir: '/workspace',
