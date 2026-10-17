@@ -8,6 +8,7 @@ import {
   IsArray,
   ValidateNested,
   IsBoolean,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -50,6 +51,10 @@ export class ExecuteTaskDto {
   @ValidateNested({ each: true })
   @Type(() => StepItemDto)
   steps?: StepItemDto[];
+
+  @IsOptional()
+  @IsObject({ message: 'env must be a valid key-value object of environment variables' })
+  env?: Record<string, string>;
 
   @IsOptional()
   @IsUrl({}, { message: 'callbackUrl must be a valid HTTP or HTTPS URL' })
