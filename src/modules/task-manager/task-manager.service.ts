@@ -8,6 +8,7 @@ import { TaskStateService, TaskRecord } from './task-state.service';
 import { DockerExecutorService } from './docker-executor.service';
 import { CommandSanitizerService } from './command-sanitizer.service';
 import { SecretCryptoService, EncryptedPayload } from './secret-crypto.service';
+import { ArtifactCacheService } from './artifact-cache.service';
 import { PipelineStep } from './pipeline-step.interface';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class TaskManagerService {
     private readonly dockerExecutorService: DockerExecutorService,
     private readonly commandSanitizer: CommandSanitizerService,
     private readonly secretCryptoService: SecretCryptoService,
+    private readonly artifactCacheService: ArtifactCacheService,
   ) {}
 
   async execute(taskDto: ExecuteTaskDto): Promise<string> {
@@ -49,7 +51,7 @@ export class TaskManagerService {
       throw new BadRequestException('Either a "command" or at least one entry in "steps" must be specified.');
     }
 
-    // اعتبارسنجی و رمزنگاری امن متغیرهای محیطی
+    // اعتبارسنجی و رمزنگاری متغیرهای محیطی
     const encryptedEnvMap: Record<string, EncryptedPayload> = {};
     const inputEnv = taskDto.env;
 
@@ -72,6 +74,21 @@ export class TaskManagerService {
       }
 
       this.logger.log(`Encrypted ${keys.length} environment variable(s) for task execution`);
+    }
+
+    // آماده‌سازی دایرکتوری و تنظیمات کش در صورت ارسال توسط کاربر
+    let resolvedCacheDirectory: string | undefined;
+    let resolvedCachePaths: string[] | undefined;
+
+    if (taskDto.cacheKey || (taskDto.cachePaths && taskDto.cachePaths.length > 0)) {
+      const cacheIdentifier = taskDto.cacheKey || taskDto.repoUrl || 'global-cache';
+      const safeCacheKey = this.artifactCacheService.generateCacheKey(cacheIdentifier);
+      resolvedCacheDirectory = await this.artifactCacheService.ensureCacheDirectory(safeCacheKey);
+      resolvedCachePaths = taskDto.cachePaths && taskDto.cachePaths.length > 0
+        ? taskDto.cachePaths
+        : ['/workspace/node_modules'];
+
+      this.logger.log(`Cache volume prepared for key [${safeCacheKey}] -> ${resolvedCacheDirectory}`);
     }
 
     const generatedId = uuidv4();
@@ -97,6 +114,8 @@ export class TaskManagerService {
         command: summaryCommandText,
         steps: normalizedSteps,
         encryptedEnv: encryptedEnvMap,
+        cacheDirectory: resolvedCacheDirectory,
+        cachePaths: resolvedCachePaths,
         callbackUrl: notificationCallbackUrl,
         webhookSecret: secretSignatureKey,
       },
@@ -111,7 +130,7 @@ export class TaskManagerService {
       },
     );
 
-    this.logger.log(`Job [${generatedId}] successfully queued.`);
+    this.logger.log(`Job [${generatedId}] successfully queued with cache payload.`);
     return generatedId;
   }
 
